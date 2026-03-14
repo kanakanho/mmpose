@@ -1,7 +1,27 @@
 [project]
-name = "mmpose"
+name = "mmpose-multicam"
 version = "0.1.0"
-description = "Add your description here"
+description = "Multi-camera 3D human pose, hand, and face landmark detection with OSC output"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "torch",
+    "torchvision",
+    "opencv-python",
+    "numpy",
+    "scipy",
+    "python-osc",
+    "openmim",
+    "mmengine",
+    "mmdet",
+    "setuptools",
+    "wheel"
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+]
+
+[tool.ruff]
+line-length = 120
