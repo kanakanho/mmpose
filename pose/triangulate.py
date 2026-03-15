@@ -73,6 +73,9 @@ def triangulate_pose(
     """
     複数カメラの2Dキーポイント列から133点の3D座標を一括復元する。
 
+    バッチSVD最適化: 全カメラで有効なキーポイントをまとめてnp.linalg.svdに渡し、
+    Pythonループ133回を廃止する。
+
     Args:
         proj_matrices: 各カメラの射影行列 [(3,4), ...] (カメラ数 N)
         poses_per_camera: 各カメラの2Dキーポイント配列 [(133,2) or None, ...]
@@ -83,34 +86,68 @@ def triangulate_pose(
         3Dキーポイント配列 (133, 3)。無効な点は NaN。
     """
     n_kps = 133
+    n_cams = len(proj_matrices)
     out = np.full((n_kps, 3), np.nan, dtype=np.float32)
 
     if scores_per_camera is None:
-        scores_per_camera = [None] * len(poses_per_camera)
+        scores_per_camera = [None] * n_cams
 
-    for kp_idx in range(n_kps):
-        pts_2d = []
-        valid_flags = []
+    # ── キーポイントごとの有効フラグを一括計算 ──────────────────────────────
+    # valid[c, k] = True ⟺ カメラc でキーポイントk が有効
+    valid = np.zeros((n_cams, n_kps), dtype=bool)
+    kps_list: list[np.ndarray | None] = []
 
-        for cam_idx, (pose, scores) in enumerate(
-            zip(poses_per_camera, scores_per_camera)
-        ):
+    for c, (pose, scores) in enumerate(zip(poses_per_camera, scores_per_camera)):
+        if pose is None:
+            kps_list.append(None)
+            continue
+        kps_list.append(pose)
+        v = (pose[:, 0] >= 0) & (pose[:, 1] >= 0)  # (n_kps,)
+        if scores is not None:
+            v = v & (scores >= score_threshold)
+        valid[c] = v
+
+    # ── 全カメラ有効なキーポイントをバッチSVDで一括処理 ──────────────────────
+    all_valid_mask = valid.all(axis=0)  # (n_kps,) - 全カメラで有効
+    batch_indices = np.where(all_valid_mask)[0]
+
+    if len(batch_indices) > 0:
+        # A_batch shape: (n_batch, 2*n_cams, 4)
+        n_batch = len(batch_indices)
+        A_batch = np.zeros((n_batch, 2 * n_cams, 4), dtype=np.float64)
+
+        for c, (P, pose) in enumerate(zip(proj_matrices, kps_list)):
+            if pose is None:
+                continue
+            pts = pose[batch_indices]  # (n_batch, 2)
+            x = pts[:, 0:1]  # (n_batch, 1)
+            y = pts[:, 1:2]
+            A_batch[:, 2 * c] = x * P[2] - P[0]  # (n_batch, 4)
+            A_batch[:, 2 * c + 1] = y * P[2] - P[1]
+
+        # バッチSVD: Vt shape (n_batch, 4, 4) ※ 2*n_cams >= 4 の場合
+        _, _, Vt = np.linalg.svd(A_batch)  # Vt: (n_batch, min_dim, 4)
+        X = Vt[:, -1, :]  # (n_batch, 4) 最小特異値ベクトル
+        w = X[:, 3:4]
+        nonzero = np.abs(w) > 1e-10
+        X_norm = np.where(nonzero, X / np.where(nonzero, w, 1.0), np.nan)
+        out[batch_indices] = X_norm[:, :3].astype(np.float32)
+
+    # ── 一部カメラのみ有効なキーポイントを個別処理（フォールバック） ──────────
+    partial_mask = (~all_valid_mask) & (valid.sum(axis=0) >= 2)
+    for kp_idx in np.where(partial_mask)[0]:
+        pts_2d: list[np.ndarray] = []
+        flags: list[bool] = []
+        for c, (pose, scores) in enumerate(zip(kps_list, scores_per_camera)):
             if pose is None:
                 pts_2d.append(np.zeros(2, dtype=np.float32))
-                valid_flags.append(False)
+                flags.append(False)
                 continue
-
-            pt = pose[kp_idx]  # (2,)
-            # 負座標はマスク済み（detector.py で設定）
-            is_valid = float(pt[0]) >= 0 and float(pt[1]) >= 0
-
-            if scores is not None:
-                is_valid = is_valid and float(scores[kp_idx]) >= score_threshold
-
+            pt = pose[kp_idx]
+            is_valid = bool(valid[c, kp_idx])
             pts_2d.append(pt)
-            valid_flags.append(is_valid)
-
-        pt3d = triangulate_point(proj_matrices, pts_2d, valid_flags)
+            flags.append(is_valid)
+        pt3d = triangulate_point(proj_matrices, pts_2d, flags)
         if pt3d is not None:
             out[kp_idx] = pt3d
 

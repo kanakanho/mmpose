@@ -192,7 +192,9 @@ class MultiCameraPreview:
         """
         previews = []
         for frame, results in zip(frames, all_results):
-            vis = draw_pose_on_frame(frame, results)
+            # 先にリサイズしてから描画（描画コストを削減）
+            small = cv2.resize(frame, (self.display_width, self.display_height))
+            vis = draw_pose_on_frame(small, results)
             if fps > 0:
                 cv2.putText(
                     vis,
@@ -203,7 +205,7 @@ class MultiCameraPreview:
                     (255, 255, 255),
                     2,
                 )
-            previews.append(cv2.resize(vis, (self.display_width, self.display_height)))
+            previews.append(vis)
 
         combined = np.hstack(previews)
         cv2.imshow(self.window_name, combined)

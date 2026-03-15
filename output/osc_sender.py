@@ -13,6 +13,8 @@ OSCアドレス仕様:
 from __future__ import annotations
 
 import math
+import queue
+import threading
 
 import numpy as np
 
@@ -34,6 +36,9 @@ class OSCSender:
     """
     SplitPose の3D座標を OSC でブロードキャストする。
 
+    OSCアドレス文字列を初期化時にキャッシュし、送信を専用バックグラウンド
+    スレッドに分離することでメインループをブロックしない。
+
     Args:
         host: 送信先ホスト
         port: 送信先ポート
@@ -50,7 +55,23 @@ class OSCSender:
         self.port = port
         self.scale = coordinate_scale
         self._client = SimpleUDPClient(host, port)
-        print(f"[OSC] 送信先: {host}:{port}")
+
+        # OSCアドレス文字列をキャッシュ（毎フレームのf-string生成を排除）
+        self._body_addrs = [f"/body/{name}" for name in BODY_KEYPOINT_NAMES]
+        self._left_addrs = [f"/hand/left/{name}" for name in HAND_KEYPOINT_NAMES]
+        self._right_addrs = [f"/hand/right/{name}" for name in HAND_KEYPOINT_NAMES]
+        self._face_addrs = [f"/face/{i}" for i in range(68)]
+
+        # 非同期送信キュー（maxsize=1でフレームドロップ方式、古いデータを捨てる）
+        self._send_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._send_thread = threading.Thread(
+            target=self._send_worker, daemon=True, name="OSCSendThread"
+        )
+        self._send_thread.start()
+
+        print(f"[OSC] 送信先: {host}:{port} (非同期送信スレッド起動済み)")
+
+    # ── 内部送信メソッド ──────────────────────────────────────────────────────
 
     def _send_xyz(self, address: str, pos: np.ndarray) -> None:
         """1点の座標を送信。NaNは0として送信する。"""
@@ -63,31 +84,43 @@ class OSCSender:
             z *= self.scale
         self._client.send_message(address, [x, y, z])
 
+    def _send_worker(self) -> None:
+        """バックグラウンドスレッド: キューからSplitPoseを受け取って送信する。"""
+        while True:
+            item = self._send_queue.get()
+            if item is None:
+                break
+            kind, payload = item
+            if kind == "pose":
+                self._do_send_pose(payload)
+            elif kind == "frame":
+                self._client.send_message("/frame", int(payload))
+
+    def _do_send_pose(self, split: SplitPose) -> None:
+        """キャッシュ済みアドレスを使って128点を送信する（ワーカースレッド内）。"""
+        for i, addr in enumerate(self._body_addrs):
+            self._send_xyz(addr, split.body[i])
+        for i, addr in enumerate(self._left_addrs):
+            self._send_xyz(addr, split.left_hand[i])
+        for i, addr in enumerate(self._right_addrs):
+            self._send_xyz(addr, split.right_hand[i])
+        for i, addr in enumerate(self._face_addrs):
+            self._send_xyz(addr, split.face[i])
+
+    # ── 公開API ───────────────────────────────────────────────────────────────
+
     def send_pose(self, split: SplitPose) -> None:
         """
-        SplitPose の全座標を OSC で送信する。
+        SplitPose の全座標をOSCで送信する（非同期キューに積む）。
 
-        各ジョイントのアドレス例:
-          /body/left_shoulder
-          /hand/left/wrist
-          /hand/right/index_tip
-          /face/0 ～ /face/67
+        キューが満杯の場合は古いアイテムを捨てて最新フレームを優先する。
         """
-        # ── 体 ──────────────────────────────────────────────────────────────
-        for i, name in enumerate(BODY_KEYPOINT_NAMES):
-            self._send_xyz(f"/body/{name}", split.body[i])
-
-        # ── 左手 ─────────────────────────────────────────────────────────────
-        for i, name in enumerate(HAND_KEYPOINT_NAMES):
-            self._send_xyz(f"/hand/left/{name}", split.left_hand[i])
-
-        # ── 右手 ─────────────────────────────────────────────────────────────
-        for i, name in enumerate(HAND_KEYPOINT_NAMES):
-            self._send_xyz(f"/hand/right/{name}", split.right_hand[i])
-
-        # ── 顔 (68点) ────────────────────────────────────────────────────────
-        for i in range(len(split.face)):
-            self._send_xyz(f"/face/{i}", split.face[i])
+        # 古いフレームを捨てて新しいものだけキューに入れる
+        try:
+            self._send_queue.get_nowait()
+        except queue.Empty:
+            pass
+        self._send_queue.put_nowait(("pose", split))
 
     def send_frame_start(self, frame_idx: int) -> None:
         """フレーム開始を通知する（同期用）"""

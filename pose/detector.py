@@ -4,12 +4,13 @@ MMPose 推論モジュール
 RTMPose wholebody (COCO-WholeBody 133点) により
 体・顔・両手のキーポイントを各カメラフレームから検出する。
 
-CPU 動作を想定。
+Apple Silicon: device="mps"、NVIDIA GPU: device="cuda:0"、非対応時: "cpu" に自動フォールバック。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import threading
 
 import numpy as np
 
@@ -24,6 +25,9 @@ class PoseResult:
 
 
 class WholebodyDetector:
+    # MMPoseのグローバルレジストリ初期化は並列実行非対応のため、クラスレベルでロックする
+    _load_lock = threading.Lock()
+
     """
     MMPoseInferencer の wholebody モデルをラップし、
     各フレームから PoseResult を返す。
@@ -51,6 +55,15 @@ class WholebodyDetector:
         if self._inferencer is not None:
             return
 
+        with WholebodyDetector._load_lock:
+            # ロック取得後に再チェック（他スレッドがロード済みの場合をスキップ）
+            if self._inferencer is not None:
+                return
+
+            self._load_inner()
+
+    def _load_inner(self) -> None:
+        """実際のロード処理（_load_lock 保持中に呼ばれること）"""
         try:
             from mmpose.apis import MMPoseInferencer  # type: ignore
         except ImportError as e:
@@ -61,6 +74,28 @@ class WholebodyDetector:
                 "  mim install mmengine mmcv mmdet mmpose"
             ) from e
 
+        # デバイス可用性チェック・自動フォールバック
+        # NOTE: mmcv のカスタム NMS 拡張 (mmcv/ops/nms.py) は MPS 未対応のため、
+        #       Apple Silicon でも device="mps" は CPU にフォールバックする。
+        device = self.device
+        if device == "mps":
+            print(
+                "[Detector] mmcv NMS が MPS 未対応のため CPU にフォールバックします。"
+            )
+            device = "cpu"
+        elif device.startswith("cuda"):
+            try:
+                import torch
+
+                if not torch.cuda.is_available():
+                    print(
+                        f"[Detector] {device} が利用できません。CPU にフォールバックします。"
+                    )
+                    device = "cpu"
+            except Exception:
+                device = "cpu"
+
+        self.device = device
         print(
             f"[Detector] MMPose wholebody モデルをロード中 (device={self.device}) ..."
         )
