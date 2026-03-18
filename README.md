@@ -104,12 +104,35 @@ python main.py --mode run --cameras 0 1 --no-preview
 | `--no-calibration`  | —                    | キャリブレーションなし（2D モード） |
 | `--score-threshold` | `0.3`                | キーポイント信頼度の閾値            |
 | `--device`          | `cpu`                | 推論デバイス（`cpu` / `cuda:0`）    |
+| `--model-preset`    | `high`               | モデルプリセット（`high` / `balanced`）|
 | `--osc-host`        | `127.0.0.1`          | OSC 送信先ホスト                    |
 | `--osc-port`        | `9000`               | OSC 送信先ポート                    |
 | `--osc-scale`       | `0.001`              | 座標スケール係数（mm→m）            |
 | `--no-preview`      | —                    | OpenCV プレビューを無効化           |
 | `--preview-width`   | `640`                | プレビュー表示幅（px）              |
 | `--params-path`     | `camera_params.json` | カメラパラメータのパス              |
+
+#### `--model-preset` による精度・速度の選択
+
+| プリセット | モデル         | 解像度   | 特徴                                       |
+| ---------- | -------------- | -------- | ------------------------------------------ |
+| `high`     | HRNet-W48      | 384×288  | **高精度** - 詳細なランドマークを検出（デフォルト）|
+| `balanced` | ResNet-50      | 256×192  | **高速** - 精度とパフォーマンスの均衡      |
+
+**使用例:**
+
+```powershell
+# 高精度モード（デフォルト）
+python main.py --mode run --cameras 0 --device cuda:0 --model-preset high
+
+# 高速モード（GPU メモリが限られている場合）
+python main.py --mode run --cameras 0 --device cuda:0 --model-preset balanced
+```
+
+```bash
+# Linux / macOS
+python main.py --mode run --cameras 0 --device cuda:0 --model-preset balanced
+```
 
 ---
 

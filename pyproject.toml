@@ -3,20 +3,28 @@ name = "mmpose-multicam"
 version = "0.1.0"
 description = "Multi-camera 3D human pose, hand, and face landmark detection with OSC output"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10, <3.13"
 dependencies = [
-    "torch",
-    "torchvision",
+    "torch==2.3.0+cu121",
+    "torchvision==0.18.0+cu121",
     "opencv-python",
-    "numpy",
+    "numpy<2.0.0",
     "scipy",
     "python-osc",
     "openmim",
-    "mmengine",
-    "mmdet",
-    "setuptools",
+    "setuptools==65.0",
     "wheel"
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
+torchaudio = { index = "pytorch-cu121" }
 
 [project.optional-dependencies]
 dev = [

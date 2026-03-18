@@ -125,6 +125,12 @@ def parse_args() -> argparse.Namespace:
         default="cpu",
         help="推論デバイス (default: cpu / cudaが使える場合は cuda:0 を指定)",
     )
+    parser.add_argument(
+        "--model-preset",
+        choices=["high", "balanced"],
+        default="high",
+        help="モデルプリセット: high=HRNet-W48 384x288 (高精度), balanced=ResNet-50 256x192 (高速)",
+    )
     # ─── OSC 設定 ────────────────────────────────────────────────────────────
     parser.add_argument("--osc-host", default="127.0.0.1", help="OSC送信先ホスト")
     parser.add_argument("--osc-port", type=int, default=9000, help="OSC送信先ポート")
@@ -185,7 +191,7 @@ def run_inference(args: argparse.Namespace) -> None:
     # ─── モジュール初期化 ────────────────────────────────────────────────────
     # カメラ台数分のDetectorを生成（並列推論のためスレッドセーフに各インスタンスを使用）
     detectors: dict[int, WholebodyDetector] = {
-        idx: WholebodyDetector(device=args.device, score_threshold=args.score_threshold)
+        idx: WholebodyDetector(device=args.device, score_threshold=args.score_threshold, model_preset=args.model_preset)
         for idx in camera_indices
     }
     # MMPoseのレジストリ競合を防ぐため、並列推論開始前に順番にロードする
